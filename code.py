@@ -9,19 +9,30 @@ import warnings
 def compute_psd_from_adev(adevs, taus, vartype='ADEV'):
     """
     Generate an approximation of the Power Spectral Density (PSD) from an input Allan Deviation (ADEV) or Hadamard Deviation (HDEV).
-    F. De Marchi, M. K. Plumaris, E. A. Burt and L. Iess, "An Algorithm to Estimate the Power Spectral Density From Allan Deviation," in IEEE Transactions on Ultrasonics, Ferroelectrics, and Frequency Control, vol. 71, no. 4, pp. 506-515, April 2024, doi: 10.1109/TUFFC.2024.3372395.
+    F. De Marchi, M. K. Plumaris, E. A. Burt and L. Iess, "An Algorithm to Estimate the Power Spectral Density From Allan Deviation," 
+    in IEEE Transactions on Ultrasonics, Ferroelectrics, and Frequency Control, vol. 71, no. 4, pp. 506-515, April 2024,
+    doi: 10.1109/TUFFC.2024.3372395.
 
-    Parameters:
-        adevs (list of floats): Allan Deviation (ADEV) values, representing the deviation at each tau.
-        taus (list of floats): Corresponding tau values (integration times) for each ADEV value.
-        vartype (str): Type of variance, either 'ADEV' for Allan Deviation or 'HDEV' for Hadamard Deviation. Default is 'ADEV'.
+    Parameters
+    ----------
+    adevs: list of floats
+        Allan Deviation (ADEV) values, representing the deviation at each tau.
+    taus: list of floats
+        Corresponding integration times for each ADEV value.
+    vartype: str
+        Type of variance, either 'ADEV' for Allan Deviation or 'HDEV' for Hadamard Deviation. Default is 'ADEV'.
 
-    Returns:
-        dict: A dictionary with the following keys:
-            'frequency_nodes' (list of floats): Frequency nodes corresponding to the taus
-            'values' (list of floats): Computed PSD values at each frequency node.
-            'hi' (list of floats): PSD coefficients for each frequency interval.
-            'alphas' (list of floats): Slopes in the frequency domain for each interval.
+    Returns
+    -------
+    A dictionary with the following:
+        'frequency_nodes': list of floats
+             Frequency nodes corresponding to the taus
+        'values': list of floats
+            Computed PSD values at each frequency node.
+        'hi': list of floats
+            PSD coefficients for each frequency interval.
+        'alphas': list of floats
+            Slopes in the frequency domain for each interval.
 
     """
     
@@ -57,13 +68,21 @@ def compute_psd_from_adev(adevs, taus, vartype='ADEV'):
 def psd_to_adev(hi, alphas, frequency_nodes, taus):
     """
     Convert PSD to Allan deviation values using direct numerical integration of their fundamental relationship (see NIST Special Publication 1065 eq 65)
-        Parameters:
-            'hi' (list of floats): PSD coefficients for each frequency interval.
-            'alphas' (list of floats): Slopes in the frequency domain for each interval.
-            
+    
+    Parameters
+    ----------
+    hi: list of floats
+        PSD coefficients for each frequency interval.
+    alphas: list of floats
+        Slopes in the frequency domain for each interval.
+    frequency_nodes: list of floats
+        Frequency nodes denoting the PSD intervals
+    taus: list of floats
+        Integration time values for desired PSD output
 
-        Returns:
-            dict: A dictionary with tau as keys and corresponding ADEV as values.
+    Returns
+    ----------
+    A dictionary containing the tau as keys and corresponding ADEV as values.
             
             """
     
