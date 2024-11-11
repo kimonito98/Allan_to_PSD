@@ -1,8 +1,9 @@
 import numpy as np
-from scipy.integrate import quad
+from scipy.integrate import quad, IntegrationWarning
 from numpy.fft import ifft
 import allantools
 from matplotlib import pylab as plt
+import warnings
 
 
 def compute_psd_from_adev(adevs, taus, vartype='ADEV'):
@@ -10,146 +11,163 @@ def compute_psd_from_adev(adevs, taus, vartype='ADEV'):
     Generate an approximation of the Power Spectral Density (PSD) from an input Allan Deviation (ADEV) or Hadamard Deviation (HDEV).
     F. De Marchi, M. K. Plumaris, E. A. Burt and L. Iess, "An Algorithm to Estimate the Power Spectral Density From Allan Deviation," in IEEE Transactions on Ultrasonics, Ferroelectrics, and Frequency Control, vol. 71, no. 4, pp. 506-515, April 2024, doi: 10.1109/TUFFC.2024.3372395.
 
-
     Parameters:
-        adevs (list): Allan Deviation (ADEV) values.
-        taus (list): Corresponding tau values for the ADEV.
-        vartype (str): Type of variance ('ADEV' or 'HDEV').
+        adevs (list of floats): Allan Deviation (ADEV) values, representing the deviation at each tau.
+        taus (list of floats): Corresponding tau values (integration times) for each ADEV value.
+        vartype (str): Type of variance, either 'ADEV' for Allan Deviation or 'HDEV' for Hadamard Deviation. Default is 'ADEV'.
 
     Returns:
-        dict: A dictionary containing:
-            - 'frequencies': Corresponding frequency nodes for the PSD.
-            - 'psd_values': Power Spectral Density (PSD) values.
+        dict: A dictionary with the following keys:
+            'frequency_nodes' (list of floats): Frequency nodes corresponding to the taus
+            'values' (list of floats): Computed PSD values at each frequency node.
+            'hi' (list of floats): PSD coefficients for each frequency interval.
+            'alphas' (list of floats): Slopes in the frequency domain for each interval.
+
     """
-    def q_avar(z):
-        return 1
-
-    def q_hvar(z):
-        return (4/3) * (np.sin(z)**2)
-
-    if vartype == 'ADEV':
-        q = q_avar
-    elif vartype == 'HDEV':
-        q = q_hvar
-    else:
-        raise ValueError("Unknown vartype. Please use 'ADEV' or 'HDEV'.")
-
-    # Step 1: Calculate slopes (mu_i)
-    mus = [2 * (np.log(adevs[i]) - np.log(adevs[i - 1])) / (np.log(taus[i]) - np.log(taus[i - 1])) for i in range(1, len(adevs))]
     
-    # Step 2: Calculate Bi coefficients
-    Bi = [adevs[i]**2 * taus[i]**(-mus[i - 1]) for i in range(1, len(mus) + 1)]
-        
-    # Step 3: Calculate hi coefficients in the frequency domain
-    hi = []
-    integral_values = []
-    for i in range(len(Bi)):
-        integral_value, _ = quad(lambda z: q(z) * np.sin(z)**4 / (z**(3 + mus[i])), 0, np.inf)
-        integral_values.append(integral_value)
-        hi.append(Bi[i] / (2 * integral_value * (np.pi**mus[i])))
-
-    # Reverse the hi values for frequency ordering
-    hi.reverse()
+    q = lambda z: 1 if vartype == 'ADEV' else (4/3) * (np.sin(z)**2)
     
-    # Step 4: Calculate slopes in the frequency domain (alpha_i)
-    alphas = [-mus[-(i + 1)] - 1 for i in range(len(mus))]
+    # Filter consecutive slopes (mus) and calculate Bi coefficients
+    mus, filtered_adevs, filtered_taus = [], [adevs[0]], [taus[0]]
+    for i in range(1, len(adevs)):
+        mu = 2 * (np.log(adevs[i]) - np.log(adevs[i - 1])) / (np.log(taus[i]) - np.log(taus[i - 1]))
+        if not mus or abs(mu - mus[-1]) > 1e-5:
+            mus.append(mu)
+            filtered_adevs.append(adevs[i])
+            filtered_taus.append(taus[i])
+        if vartype == 'ADEV' and not (-2 <= mu <= 2) or vartype == 'HDEV' and not (-2 <= mu <= 4):
+            raise ValueError(f"Integral not convergent between nodes {filtered_taus[i - 1]} [s] and {filtered_taus[i]} [s]")
 
-    # Step 5: Calculate frequency nodes (f_n-i)
-    frequency_nodes = [1 / (10 * np.pi * taus[i]) * (integral_values[i] / integral_values[i + 1])**(1 / (mus[i + 1] - mus[i])) for i in range(len(mus) - 1)]
+    Bi = [filtered_adevs[i]**2 * filtered_taus[i]**(-mus[i - 1]) for i in range(1, len(mus) + 1)]
+    hi, integral_values = [], []
+    for i, B in enumerate(Bi):
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", category=IntegrationWarning)
+            integral_val, _ = quad(lambda z: q(z) * np.sin(z)**4 / (z**(3 + mus[i])), 0, np.inf)
+        integral_values.append(integral_val)
+        hi.append(B / (2 * integral_val * (np.pi**mus[i])))
+    
+    alphas = [-mu - 1 for mu in mus[::-1]]
+    frequency_nodes = [1 / (10 * np.pi * filtered_taus[i]) * (integral_values[i] / integral_values[i + 1])**(1 / (mus[i + 1] - mus[i])) for i in range(len(mus) - 1)]
     frequency_nodes.reverse()
-
-    # Calculate PSD values
-    psd_values = [hi[i] * frequency_nodes[i]**(alphas[i]) for i in range(len(frequency_nodes))]
+    psd_values = [hi[i] * frequency_nodes[i]**(alphas[i]) for i in range(len(frequency_nodes))] if len(filtered_adevs) > 2 else [hi[0] * (1 / tau)**alphas[0] for tau in filtered_taus[::-1]]
     
-    return {'frequencies': frequency_nodes, 'psd_values': psd_values}
+    return {'frequency_nodes': frequency_nodes, 'values': psd_values, 'hi': hi[::-1], 'alphas': alphas}
+
+def psd_to_adev(hi, alphas, frequency_nodes, taus):
+    """
+    Convert PSD to Allan deviation values using direct numerical integration of their fundamental relationship (see NIST Special Publication 1065 eq 65)
+        Parameters:
+            'hi' (list of floats): PSD coefficients for each frequency interval.
+            'alphas' (list of floats): Slopes in the frequency domain for each interval.
+            
+
+        Returns:
+            dict: A dictionary with tau as keys and corresponding ADEV as values.
+            
+            """
+    
+    def integrand(z, alpha):
+        return (np.sin(z)**4) / (z**(2 - alpha))
+    
+    adev_dict = {}
+    integration_frequencies = [0] + frequency_nodes + [np.inf]
+    for tau in taus:
+        sigma_y2 = 0
+        for i, (h, alpha) in enumerate(zip(hi, alphas)):
+            factor = h / (np.pi * tau)**(alpha + 1)
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore", category=IntegrationWarning)
+                integral_value, _ = quad(integrand, np.pi * tau * integration_frequencies[i], np.pi * tau * integration_frequencies[i+1], args=(alpha,))
+            sigma_y2 += factor * integral_value
+        adev = np.sqrt(2 * sigma_y2)
+        adev_dict[tau] = adev
+    
+    return adev_dict
 
 
-def generate_noise_from_psd(psd_values, frequencies, duration, timestep, output='phase'):
+def generate_noise_from_psd(frequency_nodes, hi, alphas, duration, timestep, output='phase'):
     """
     Generate time-domain noise from the given PSD values.
     Timmer, Jens, and Michel Koenig. "On generating power law noise." Astronomy and Astrophysics, v. 300, p. 707 300 (1995): 707.
 
     Parameters:
-        psd_values (list): Power Spectral Density (PSD) values.
-        frequencies (list): Corresponding frequencies for PSD values.
-        duration (float): Duration of the time series to generate, in seconds.
-        timestep (float): Timestep between samples, in seconds.
-        output (str): Type of output ('phase' or 'frequency').
+        'frequency_nodes' (list of floats): Frequency nodes corresponding to the PSD.
+        'hi' (list of floats): PSD coefficients for each frequency interval.
+        'alphas' (list of floats): Slopes in the frequency domain for each interval.
+        'duration' (float): Duration of the generated time series in seconds.
+        'timestep' (float): Timestep between samples in the generated time series in seconds (sampling rate).
 
     Returns:
         np.ndarray: Generated noise in the time domain.
+        
     """
-    # Determine number of samples
-    n = int(duration / timestep)
     
-    # Generate equally spaced frequencies for FFT
+    # extrapolate the behaviour at infinity
+    hi = psd_data['hi'] + [psd_data['hi'][-1]]
+    alphas = psd_data['alphas'] + [psd_data['alphas'][-1]]
+    
+    n = int(duration / timestep)
     f1 = 1 / ((n - 1) * timestep)
     fn = 1 / (2 * timestep)
-    freq_nodes = np.linspace(f1, fn, n // 2 + 1)
+    frequencies = np.linspace(f1, fn, n // 2 + 1)
     
-    # Interpolate PSD values to match the equally spaced frequencies
-    log_freq_nodes = np.log10(frequencies)
-    log_psd_values = np.log10(psd_values)
-    log_interpolated_psd = np.interp(np.log10(freq_nodes), log_freq_nodes, log_psd_values)
-    interpolated_psd = 10**log_interpolated_psd
+    S_y = np.zeros_like(frequencies)
+    for i, f in enumerate(frequencies):
+        # Determine which interval the frequency f belongs to
+        if f < frequency_nodes[0]:
+            S_y[i] = hi[0] * f ** alphas[0]
+        elif f > frequency_nodes[-1]:
+            S_y[i] = hi[-1] * f ** alphas[-1]
+        else:
+            # Find the interval that contains f
+            for j in range(1, len(frequency_nodes)):
+                if frequency_nodes[j - 1] <= f < frequency_nodes[j]:
+                    S_y[i] = hi[j] * f ** alphas[j]
+                    break    
     
-    # Calculate Sx(f) from Sy(f) using the relationship Sx(f) = Sy(f) / (2 * pi * f)^2
-    Sx = interpolated_psd / (2 * np.pi * freq_nodes)**2
-    Sx[0] = 0  # Set DC component to zero
+    Sx = S_y / (2 * np.pi * frequencies) ** 2
+    Sx[0] = 0
     
-    # Generate random noise in the frequency domain with the PSD shape
     X = np.zeros(n, dtype=complex)
     for j in range(1, n // 2 + 1):
-        Nj_R = np.random.normal(0, 1)
-        Nj_I = np.random.normal(0, 1)
-        X[j] = np.sqrt(Sx[j]) / 2 * (Nj_R + 1j * Nj_I)
+        X[j] = np.sqrt(Sx[j]) / 2 * (np.random.normal(0, 1) + 1j * np.random.normal(0, 1))
     
-    # Use symmetry for the inverse FFT
     X[n // 2 + 1:] = np.conj(X[1:n // 2][::-1])
-    
-    # Compute inverse FFT to get time-domain signal
     x = ifft(X) * np.sqrt((n - 1) / timestep)
-    
-    # Return either phase or frequency fluctuations
-    if output == 'phase':
-        return x.real
-    else:
-        # Frequency fluctuations from phase (differentiation in discrete time)
-        y = np.diff(x.real) / timestep
-        return np.concatenate(([0], y))
+    return x.real if output == 'phase' else np.concatenate(([0], np.diff(x.real) / timestep))
 
-    
-# Example Usage
-clock = "USO"
+# Example Usage (Accubeat USO)
 taus = [4, 8, 16, 32, 64, 128, 256, 512, 1.02e3, 2.05e3, 4.1e3, 8.19e3, 1.64e4, 3.28e4, 6.55e4]
-adevs = [ 1.07e-13, 1.04e-13, 9.84e-14, 1.04e-13, 1.11e-13, 1.21e-13, 1.33e-13, 1.49e-13, 1.6e-13, 2.17e-13, 3.4e-13, 6.6e-13, 1.12e-12, 1.97e-12, 3.27e-12]
+adevs = [1.07e-13, 1.04e-13, 9.84e-14, 1.04e-13, 1.11e-13, 1.21e-13, 1.33e-13, 1.49e-13, 1.6e-13, 2.17e-13, 3.4e-13, 6.6e-13, 1.12e-12, 1.97e-12, 3.27e-12]
 
-#clock = "RAFS"
-#taus =[10, 30, 120, 480, 1.92e3, 1.54e4, 6.14e4, 1.23e5, 2.46e5, 4.92e5, 9.83e5 ]
-#adevs = [1e-12, 3.99e-13, 1.66e-13, 8.85e-14, 4.15e-14, 1.62e-14, 8.99e-15, 9.73e-15, 1.17e-14, 1.26e-14, 1.36e-14]
-
-vartype = 'ADEV'
-
-# Generate PSD from ADEV
-psd_data = compute_psd_from_adev(adevs, taus, vartype=vartype)
-print("Frequencies:", psd_data['frequencies'])
-print("PSD Values:", psd_data['psd_values'])
-
-# Generate time-domain noise from PSD
-duration = taus[-1]*50  # 
-timestep = taus[0]/2    # 
-noise = generate_noise_from_psd(psd_data['psd_values'], psd_data['frequencies'], duration, timestep)
-times = np.arange(0, len(noise))*timestep
-
-if vartype == 'ADEV':
-    (my_taus, adev_from_my_noise, adev_from_my_noise_error, ns) = allantools.adev(noise, rate = 1/timestep, data_type = 'phase', taus = taus)
+# Example Usage (Orolia RAFS)
+taus =[10, 30, 120, 480, 1.92e3, 1.54e4, 6.14e4, 1.23e5, 2.46e5, 4.92e5, 9.83e5 ]
+adevs = [1e-12, 3.99e-13, 1.66e-13, 8.85e-14, 4.15e-14, 1.62e-14, 8.99e-15, 9.73e-15, 1.17e-14, 1.26e-14, 1.36e-14]
 
 
-fig, ax = plt.subplots( figsize = (10, 6))
-ax.loglog(taus, adevs, label = clock +  ' adev ')
-ax.loglog(my_taus, adev_from_my_noise, label = clock + ' adev -> psd - > noise -> adev')
-ax.grid(which = 'both')
-ax.set_ylabel(vartype + ' [-]')
-ax.set_xlabel(r'$\tau$ [s]')
-ax.legend()
+# calculate the "approximate" PSD from the ADEV
+psd_data = compute_psd_from_adev(adevs, taus, vartype='ADEV')
+
+# recompute the ADEV from integration of the PSD
+adev_dict = psd_to_adev(psd_data['hi'], psd_data['alphas'], psd_data['frequency_nodes'], taus)
+
+# generate noise
+duration = taus[-1] * 100
+timestep = taus[0] / 2
+noise = generate_noise_from_psd(psd_data['frequency_nodes'], psd_data['hi'],psd_data['alphas'], duration, timestep)
+times = np.arange(0, len(noise)) * timestep
+
+# Calculate ADEV from the generated noise
+my_taus, adev_from_noise, _, _ = allantools.adev(noise, rate=1/timestep, data_type='phase', taus=taus)
+
+# Plot results
+plt.figure(figsize=(10, 6))
+plt.loglog(taus, adevs, label='Original ADEV')
+plt.loglog(list(adev_dict.keys()), list(adev_dict.values()), label='ADEV -> PSD -> ADEV')
+plt.loglog(my_taus, adev_from_noise, label='ADEV -> PSD -> noise -> ADEV')
+plt.grid(which='both')
+plt.ylabel('ADEV [-]')
+plt.xlabel(r'$\tau$ [s]')
+plt.legend()
 plt.show()
