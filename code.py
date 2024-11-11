@@ -10,9 +10,9 @@ def compute_psd_from_adev(adevs, taus, vartype='ADEV'):
     """
     Generate an approximation of the Power Spectral Density (PSD) from an input Allan Deviation (ADEV) or Hadamard Deviation (HDEV).
     F. De Marchi, M. K. Plumaris, E. A. Burt and L. Iess, "An Algorithm to Estimate the Power Spectral Density From Allan Deviation," 
-    in IEEE Transactions on Ultrasonics, Ferroelectrics, and Frequency Control, vol. 71, no. 4, pp. 506-515, April 2024,
-    doi: 10.1109/TUFFC.2024.3372395.
-
+    in IEEE Transactions on Ultrasonics, Ferroelectrics, and Frequency Control, vol. 71, no. 4, pp. 506-515, April 2024,  doi: 10.1109/TUFFC.2024.3372395
+    https://ieeexplore.ieee.org/document/10466605
+    
     Parameters
     ----------
     adevs: list of floats
@@ -159,21 +159,21 @@ def generate_noise_from_psd(frequency_nodes, hi, alphas, duration, timestep, out
 # Example Usage (Accubeat USO)
 taus = [4, 8, 16, 32, 64, 128, 256, 512, 1.02e3, 2.05e3, 4.1e3, 8.19e3, 1.64e4, 3.28e4, 6.55e4]
 adevs = [1.07e-13, 1.04e-13, 9.84e-14, 1.04e-13, 1.11e-13, 1.21e-13, 1.33e-13, 1.49e-13, 1.6e-13, 2.17e-13, 3.4e-13, 6.6e-13, 1.12e-12, 1.97e-12, 3.27e-12]
+vartype = 'ADEV'
 
 # Example Usage (Orolia RAFS)
-taus =[10, 30, 120, 480, 1.92e3, 1.54e4, 6.14e4, 1.23e5, 2.46e5, 4.92e5, 9.83e5 ]
-adevs = [1e-12, 3.99e-13, 1.66e-13, 8.85e-14, 4.15e-14, 1.62e-14, 8.99e-15, 9.73e-15, 1.17e-14, 1.26e-14, 1.36e-14]
-
+#taus =[10, 30, 120, 480, 1.92e3, 1.54e4, 6.14e4, 1.23e5, 2.46e5, 4.92e5, 9.83e5 ]
+#adevs = [1e-12, 3.99e-13, 1.66e-13, 8.85e-14, 4.15e-14, 1.62e-14, 8.99e-15, 9.73e-15, 1.17e-14, 1.26e-14, 1.36e-14]
 
 # calculate the "approximate" PSD from the ADEV
-psd_data = compute_psd_from_adev(adevs, taus, vartype='ADEV')
+psd_data = compute_psd_from_adev(adevs, taus, vartype=vartype)
 
-# recompute the ADEV from integration of the PSD
+# recompute the ADEV from direct numerical integration of the PSD
 adev_dict = psd_to_adev(psd_data['hi'], psd_data['alphas'], psd_data['frequency_nodes'], taus)
 
-# generate noise
-duration = taus[-1] * 100
-timestep = taus[0] / 2
+# Generate noise with the desired PSD, using
+duration = taus[-1] * 100 # duration to capture full ADEV behaviour
+timestep = taus[0] / 2 # Nyquist sample rate
 noise = generate_noise_from_psd(psd_data['frequency_nodes'], psd_data['hi'],psd_data['alphas'], duration, timestep)
 times = np.arange(0, len(noise)) * timestep
 
