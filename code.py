@@ -10,9 +10,9 @@ def compute_psd_from_adev(adevs, taus, vartype='ADEV'):
     """
     Generate an approximation of the Power Spectral Density (PSD) from an input Allan Deviation (ADEV) or Hadamard Deviation (HDEV).
     F. De Marchi, M. K. Plumaris, E. A. Burt and L. Iess, "An Algorithm to Estimate the Power Spectral Density From Allan Deviation," 
-    in IEEE Transactions on Ultrasonics, Ferroelectrics, and Frequency Control, vol. 71, no. 4, pp. 506-515, April 2024,  doi: 10.1109/TUFFC.2024.3372395
-    https://ieeexplore.ieee.org/document/10466605
-    
+    in IEEE Transactions on Ultrasonics, Ferroelectrics, and Frequency Control, vol. 71, no. 4, pp. 506-515, April 2024,
+    doi: 10.1109/TUFFC.2024.3372395.
+
     Parameters
     ----------
     adevs: list of floats
@@ -37,33 +37,65 @@ def compute_psd_from_adev(adevs, taus, vartype='ADEV'):
     """
     
     q = lambda z: 1 if vartype == 'ADEV' else (4/3) * (np.sin(z)**2)
+
+
+    # Calculate the slopes (mu values) between consecutive adev points
+    mus = []
+    filtered_adevs = [adevs[0]]
+    filtered_taus = [taus[0]]
     
-    # Filter consecutive slopes (mus) and calculate Bi coefficients
-    mus, filtered_adevs, filtered_taus = [], [adevs[0]], [taus[0]]
     for i in range(1, len(adevs)):
         mu = 2 * (np.log(adevs[i]) - np.log(adevs[i - 1])) / (np.log(taus[i]) - np.log(taus[i - 1]))
+        
+        # Add the mu value if it's not similar to the previous one
         if not mus or abs(mu - mus[-1]) > 1e-5:
             mus.append(mu)
             filtered_adevs.append(adevs[i])
             filtered_taus.append(taus[i])
-        if vartype == 'ADEV' and not (-2 <= mu <= 2) or vartype == 'HDEV' and not (-2 <= mu <= 4):
-            raise ValueError(f"Integral not convergent between nodes {filtered_taus[i - 1]} [s] and {filtered_taus[i]} [s]")
 
+    # Perform validation checks on the mu values
+    for i, mu in enumerate(mus):
+        if vartype == 'ADEV' and not (-2 <= mu <= 2):
+            raise ValueError(f"Input ADEV cannot be converted to PSD, integral not convergent between nodes {filtered_taus[i]} [s] and {filtered_taus[i+1]} [s]")
+        elif vartype == 'HDEV' and not (-2 <= mu <= 4):
+            raise ValueError(f"Input HDEV cannot be converted to PSD, integral not convergent between nodes {filtered_taus[i]} [s] and {filtered_taus[i+1]} [s]")
+
+    # Calculate Bi coefficients based on the filtered ADEV and taus
     Bi = [filtered_adevs[i]**2 * filtered_taus[i]**(-mus[i - 1]) for i in range(1, len(mus) + 1)]
-    hi, integral_values = [], []
-    for i, B in enumerate(Bi):
+    
+    # Calculate hi coefficients in the frequency domain
+    hi = []
+    integral_values = []
+    for i in range(len(Bi)):
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", category=IntegrationWarning)
-            integral_val, _ = quad(lambda z: q(z) * np.sin(z)**4 / (z**(3 + mus[i])), 0, np.inf)
-        integral_values.append(integral_val)
-        hi.append(B / (2 * integral_val * (np.pi**mus[i])))
+            integral_value, _ = quad(lambda z: q(z) * np.sin(z)**4 / (z**(3 + mus[i])), 0, np.inf)
+        integral_values.append(integral_value)
+        hi.append(Bi[i] / (2 * integral_value * (np.pi**mus[i])))
+
+    # Reverse hi values for frequency ordering
+    hi.reverse()    
+
+    # Calculate slopes (alpha_i) in the frequency domain
+    alphas = [-mus[-(i + 1)] - 1 for i in range(len(mus))]
     
-    alphas = [-mu - 1 for mu in mus[::-1]]
-    frequency_nodes = [1 / (10 * np.pi * filtered_taus[i]) * (integral_values[i] / integral_values[i + 1])**(1 / (mus[i + 1] - mus[i])) for i in range(len(mus) - 1)]
-    frequency_nodes.reverse()
-    psd_values = [hi[i] * frequency_nodes[i]**(alphas[i]) for i in range(len(frequency_nodes))] if len(filtered_adevs) > 2 else [hi[0] * (1 / tau)**alphas[0] for tau in filtered_taus[::-1]]
-    
-    return {'frequency_nodes': frequency_nodes, 'values': psd_values, 'hi': hi[::-1], 'alphas': alphas}
+    # Calculate frequency nodes and PSD values
+    if len(filtered_adevs) == 2:
+        frequency_nodes = [1 / tau for tau in filtered_taus]
+        frequency_nodes.reverse()
+        psd_values = [hi[0] * frequency_nodes[i]**(alphas[0]) for i in range(len(frequency_nodes))]
+    else:
+        frequency_nodes = [1 / (10 * np.pi * filtered_taus[i]) * (integral_values[i] / integral_values[i + 1])**(1 / (mus[i + 1] - mus[i])) for i in range(len(mus) - 1)]
+        frequency_nodes.reverse()
+        psd_values = [hi[i] * frequency_nodes[i]**(alphas[i]) for i in range(len(frequency_nodes))]
+
+    return {
+        'frequency_nodes': frequency_nodes,
+        'values': psd_values,
+        'hi': hi,
+        'alphas': alphas
+    }
+
 
 def psd_to_adev(hi, alphas, frequency_nodes, taus):
     """
